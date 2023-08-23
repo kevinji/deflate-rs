@@ -31,33 +31,23 @@ impl Symbol {
     }
 
     pub fn back_reference_length_code(length_minus_three: u8) -> u16 {
-        257 + (match length_minus_three {
-            0..=7 => u16::from(length_minus_three),
-            8..=15 => 4 + u16::from(length_minus_three / 2),
-            16..=31 => 8 + u16::from(length_minus_three / 4),
-            32..=63 => 12 + u16::from(length_minus_three / 8),
-            64..=127 => 16 + u16::from(length_minus_three / 16),
-            128..=254 => 20 + u16::from(length_minus_three / 32),
+        257 + u16::from(match length_minus_three {
+            0..=7 => length_minus_three,
+            8..=254 => {
+                let log2: u8 = length_minus_three.ilog2().try_into().unwrap();
+                4 * (log2 - 1) + (length_minus_three >> (log2 - 2) & 0b11)
+            }
             255 => 28,
         })
     }
 
     pub fn back_reference_distance_code(distance_minus_one: u16) -> u8 {
         match distance_minus_one {
-            0..=3 => u8::try_from(distance_minus_one).unwrap(),
-            4..=7 => 2 + u8::try_from(distance_minus_one / 2).unwrap(),
-            8..=15 => 4 + u8::try_from(distance_minus_one / 4).unwrap(),
-            16..=31 => 6 + u8::try_from(distance_minus_one / 8).unwrap(),
-            32..=63 => 8 + u8::try_from(distance_minus_one / 16).unwrap(),
-            64..=127 => 10 + u8::try_from(distance_minus_one / 32).unwrap(),
-            128..=255 => 12 + u8::try_from(distance_minus_one / 64).unwrap(),
-            256..=511 => 14 + u8::try_from(distance_minus_one / 128).unwrap(),
-            512..=1023 => 16 + u8::try_from(distance_minus_one / 256).unwrap(),
-            1024..=2047 => 18 + u8::try_from(distance_minus_one / 512).unwrap(),
-            2048..=4095 => 20 + u8::try_from(distance_minus_one / 1024).unwrap(),
-            4096..=8191 => 22 + u8::try_from(distance_minus_one / 2048).unwrap(),
-            8192..=16383 => 24 + u8::try_from(distance_minus_one / 4096).unwrap(),
-            16384..=32767 => 26 + u8::try_from(distance_minus_one / 8192).unwrap(),
+            0..=3 => distance_minus_one.try_into().unwrap(),
+            4..=32767 => {
+                let log2: u8 = distance_minus_one.ilog2().try_into().unwrap();
+                2 * log2 + u8::try_from(distance_minus_one >> (log2 - 1) & 1).unwrap()
+            }
             32768.. => panic!("Distance cannot be more than 32768"),
         }
     }
