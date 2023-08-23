@@ -1,0 +1,169 @@
+/// A simple LZSS implementation for the Deflate encoder and decoder.
+
+/// Maximum lookback distance for an LZSS compressed block
+pub const MAX_DISTANCE: u16 = 32_768;
+
+#[derive(Debug)]
+pub enum Symbol {
+    /// A literal byte
+    Literal(u8),
+
+    /// End of a block
+    EndOfBlock,
+
+    /// A back-reference
+    BackReference {
+        length_minus_three: u8,
+        distance_minus_one: u16,
+    },
+}
+
+impl Symbol {
+    pub fn length_code(&self) -> u16 {
+        match self {
+            Self::Literal(b) => (*b).into(),
+            Self::EndOfBlock => 256,
+            Self::BackReference {
+                length_minus_three,
+                distance_minus_one: _,
+            } => Self::back_reference_length_code(*length_minus_three),
+        }
+    }
+
+    pub fn back_reference_length_code(length_minus_three: u8) -> u16 {
+        257 + (match length_minus_three {
+            0..=7 => u16::from(length_minus_three),
+            8..=15 => 4 + u16::from(length_minus_three / 2),
+            16..=31 => 8 + u16::from(length_minus_three / 4),
+            32..=63 => 12 + u16::from(length_minus_three / 8),
+            64..=127 => 16 + u16::from(length_minus_three / 16),
+            128..=254 => 20 + u16::from(length_minus_three / 32),
+            255 => 28,
+        })
+    }
+
+    pub fn back_reference_distance_code(distance_minus_one: u16) -> u8 {
+        match distance_minus_one {
+            0..=3 => u8::try_from(distance_minus_one).unwrap(),
+            4..=7 => 2 + u8::try_from(distance_minus_one / 2).unwrap(),
+            8..=15 => 4 + u8::try_from(distance_minus_one / 4).unwrap(),
+            16..=31 => 6 + u8::try_from(distance_minus_one / 8).unwrap(),
+            32..=63 => 8 + u8::try_from(distance_minus_one / 16).unwrap(),
+            64..=127 => 10 + u8::try_from(distance_minus_one / 32).unwrap(),
+            128..=255 => 12 + u8::try_from(distance_minus_one / 64).unwrap(),
+            256..=511 => 14 + u8::try_from(distance_minus_one / 128).unwrap(),
+            512..=1023 => 16 + u8::try_from(distance_minus_one / 256).unwrap(),
+            1024..=2047 => 18 + u8::try_from(distance_minus_one / 512).unwrap(),
+            2048..=4095 => 20 + u8::try_from(distance_minus_one / 1024).unwrap(),
+            4096..=8191 => 22 + u8::try_from(distance_minus_one / 2048).unwrap(),
+            8192..=16383 => 24 + u8::try_from(distance_minus_one / 4096).unwrap(),
+            16384..=32767 => 26 + u8::try_from(distance_minus_one / 8192).unwrap(),
+            32768.. => panic!("Distance cannot be more than 32768"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_back_reference_length_codes() {
+        let expected_lengths_by_code = vec![
+            (257, vec![3]),
+            (258, vec![4]),
+            (259, vec![5]),
+            (260, vec![6]),
+            (261, vec![7]),
+            (262, vec![8]),
+            (263, vec![9]),
+            (264, vec![10]),
+            (265, vec![11, 12]),
+            (266, vec![13, 14]),
+            (267, vec![15, 16]),
+            (268, vec![17, 18]),
+            (269, (19..=22).collect()),
+            (270, (23..=26).collect()),
+            (271, (27..=30).collect()),
+            (272, (31..=34).collect()),
+            (273, (35..=42).collect()),
+            (274, (43..=50).collect()),
+            (275, (51..=58).collect()),
+            (276, (59..=66).collect()),
+            (277, (67..=82).collect()),
+            (278, (83..=98).collect()),
+            (279, (99..=114).collect()),
+            (280, (115..=130).collect()),
+            (281, (131..=162).collect()),
+            (282, (163..=194).collect()),
+            (283, (195..=226).collect()),
+            (284, (227..=257).collect()),
+            (285, vec![258]),
+        ]
+        .into_iter()
+        .collect::<HashMap<u16, Vec<u16>>>();
+
+        let mut actual_lengths_by_code = <HashMap<u16, Vec<u16>>>::new();
+        for length_minus_three in 0..=255 {
+            let length_code = Symbol::back_reference_length_code(length_minus_three);
+            let length = u16::from(length_minus_three) + 3;
+            actual_lengths_by_code
+                .entry(length_code)
+                .or_default()
+                .push(length);
+        }
+
+        assert_eq!(expected_lengths_by_code, actual_lengths_by_code);
+    }
+
+    #[test]
+    fn test_back_reference_distance_codes() {
+        let expected_distances_by_code = vec![
+            (0, vec![1]),
+            (1, vec![2]),
+            (2, vec![3]),
+            (3, vec![4]),
+            (4, vec![5, 6]),
+            (5, vec![7, 8]),
+            (6, (9..=12).collect()),
+            (7, (13..=16).collect()),
+            (8, (17..=24).collect()),
+            (9, (25..=32).collect()),
+            (10, (33..=48).collect()),
+            (11, (49..=64).collect()),
+            (12, (65..=96).collect()),
+            (13, (97..=128).collect()),
+            (14, (129..=192).collect()),
+            (15, (193..=256).collect()),
+            (16, (257..=384).collect()),
+            (17, (385..=512).collect()),
+            (18, (513..=768).collect()),
+            (19, (769..=1024).collect()),
+            (20, (1025..=1536).collect()),
+            (21, (1537..=2048).collect()),
+            (22, (2049..=3072).collect()),
+            (23, (3073..=4096).collect()),
+            (24, (4097..=6144).collect()),
+            (25, (6145..=8192).collect()),
+            (26, (8193..=12288).collect()),
+            (27, (12289..=16384).collect()),
+            (28, (16385..=24576).collect()),
+            (29, (24577..=32768).collect()),
+        ]
+        .into_iter()
+        .collect::<HashMap<u8, Vec<u16>>>();
+
+        let mut actual_distances_by_code = <HashMap<u8, Vec<u16>>>::new();
+        for distance_minus_one in 0..=32767 {
+            let distance_code = Symbol::back_reference_distance_code(distance_minus_one);
+            let distance = distance_minus_one + 1;
+            actual_distances_by_code
+                .entry(distance_code)
+                .or_default()
+                .push(distance);
+        }
+
+        assert_eq!(expected_distances_by_code, actual_distances_by_code);
+    }
+}
