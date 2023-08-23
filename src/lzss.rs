@@ -41,6 +41,14 @@ impl Symbol {
         })
     }
 
+    pub fn back_reference_length_extra_bits(length_minus_three: u8) -> u8 {
+        match length_minus_three {
+            0..=7 => 0,
+            8..=254 => u8::try_from(length_minus_three.ilog2()).unwrap() - 2,
+            255 => 0,
+        }
+    }
+
     pub fn back_reference_distance_code(distance_minus_one: u16) -> u8 {
         match distance_minus_one {
             0..=3 => distance_minus_one.try_into().unwrap(),
@@ -48,6 +56,14 @@ impl Symbol {
                 let log2: u8 = distance_minus_one.ilog2().try_into().unwrap();
                 2 * log2 + u8::try_from(distance_minus_one >> (log2 - 1) & 1).unwrap()
             }
+            32768.. => panic!("Distance cannot be more than 32768"),
+        }
+    }
+
+    pub fn back_reference_distance_extra_bits(distance_minus_one: u16) -> u8 {
+        match distance_minus_one {
+            0..=3 => 0,
+            4..=32767 => u8::try_from(distance_minus_one.ilog2()).unwrap() - 1,
             32768.. => panic!("Distance cannot be more than 32768"),
         }
     }
