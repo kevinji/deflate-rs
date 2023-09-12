@@ -35,6 +35,8 @@ impl<T> ByteBuffer<T> {
         Self::BITS - self.idx
     }
 
+    /// When reading, returns `true` if the byte has been fully read.
+    /// When writing, returns `true` if the byte-to-write is filled.
     fn needs_flush(&self) -> bool {
         self.idx == Self::BITS
     }
@@ -105,7 +107,7 @@ where
     where
         T: BitStore,
     {
-        while bits.len() > 0 {
+        while !bits.is_empty() {
             if self.buffer.needs_flush() {
                 self.read_next_byte()?;
             }
@@ -168,7 +170,7 @@ where
 
     /// Flushes the current byte. If the byte has not been fully written to, it
     /// will be padded with zeros.
-    pub fn flush(&mut self) -> io::Result<()> {
+    pub fn flush_even_if_partial(&mut self) -> io::Result<()> {
         if self.buffer.idx == 0 {
             return Ok(());
         }
@@ -182,9 +184,9 @@ where
     where
         T: BitStore,
     {
-        while bits.len() > 0 {
+        while !bits.is_empty() {
             if self.buffer.needs_flush() {
-                self.flush()?;
+                self.flush_even_if_partial()?;
             }
 
             let bit_write_count = self.buffer.write(bits);
