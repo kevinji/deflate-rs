@@ -3,13 +3,13 @@ use bitvec::prelude::*;
 use std::io;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CompressionType {
-    None,
+enum DeflateEncoding {
+    NoCompression,
     FixedHuffman,
     DynamicHuffman,
 }
 
-impl TryFrom<&BitSlice<u8>> for CompressionType {
+impl TryFrom<&BitSlice<u8>> for DeflateEncoding {
     type Error = io::Error;
 
     fn try_from(slice: &BitSlice<u8>) -> io::Result<Self> {
@@ -18,7 +18,7 @@ impl TryFrom<&BitSlice<u8>> for CompressionType {
         }
 
         match (slice[0], slice[1]) {
-            (false, false) => Ok(Self::None),
+            (false, false) => Ok(Self::NoCompression),
             (false, true) => Ok(Self::FixedHuffman),
             (true, false) => Ok(Self::DynamicHuffman),
             (true, true) => Err(io::ErrorKind::InvalidData.into()),
@@ -26,34 +26,34 @@ impl TryFrom<&BitSlice<u8>> for CompressionType {
     }
 }
 
-impl From<CompressionType> for BitVec<u8> {
-    fn from(compression_type: CompressionType) -> Self {
-        match compression_type {
-            CompressionType::None => bitvec![u8, Lsb0; 0, 0],
-            CompressionType::FixedHuffman => bitvec![u8, Lsb0; 0, 1],
-            CompressionType::DynamicHuffman => bitvec![u8, Lsb0; 1, 0],
+impl From<DeflateEncoding> for BitVec<u8> {
+    fn from(encoding: DeflateEncoding) -> Self {
+        match encoding {
+            DeflateEncoding::NoCompression => bitvec![u8, Lsb0; 0, 0],
+            DeflateEncoding::FixedHuffman => bitvec![u8, Lsb0; 0, 1],
+            DeflateEncoding::DynamicHuffman => bitvec![u8, Lsb0; 1, 0],
         }
     }
 }
 
 #[derive(Debug)]
-enum DecompressionStage {
+enum DecodeStage {
     NewBlock,
     ParsedMode {
         is_final: bool,
-        compression_type: CompressionType,
+        encoding: DeflateEncoding,
     },
     Complete,
 }
 
 #[derive(Debug)]
-pub struct Decompressor<R, W> {
+pub struct DeflateDecoder<R, W> {
     in_: BitReader<R>,
     out: BitWriter<W>,
-    stage: DecompressionStage,
+    stage: DecodeStage,
 }
 
-impl<R, W> Decompressor<R, W>
+impl<R, W> DeflateDecoder<R, W>
 where
     R: io::Read,
     W: io::Write,
@@ -62,32 +62,26 @@ where
         Self {
             in_: BitReader::new(in_),
             out: BitWriter::new(out),
-            stage: DecompressionStage::NewBlock,
+            stage: DecodeStage::NewBlock,
         }
     }
 
     fn advance_stage(&mut self) -> io::Result<()> {
         match self.stage {
-            DecompressionStage::NewBlock => {
+            DecodeStage::NewBlock => {
                 let is_final = self.in_.read_bool()?;
 
-                let compression_type_bits = bits![mut u8, Lsb0; 0; 2];
-                self.in_.read_exact(compression_type_bits)?;
-                let compression_type = (&*compression_type_bits).try_into()?;
+                let encoding_bits = bits![mut u8, Lsb0; 0; 2];
+                self.in_.read_exact(encoding_bits)?;
+                let encoding = (&*encoding_bits).try_into()?;
 
-                self.stage = DecompressionStage::ParsedMode {
-                    is_final,
-                    compression_type,
-                };
+                self.stage = DecodeStage::ParsedMode { is_final, encoding };
 
                 Ok(())
             }
-            DecompressionStage::ParsedMode {
-                is_final,
-                compression_type,
-            } => {
-                match compression_type {
-                    CompressionType::None => {
+            DecodeStage::ParsedMode { is_final, encoding } => {
+                match encoding {
+                    DeflateEncoding::NoCompression => {
                         self.in_.skip_to_byte_end();
 
                         let len = self.in_.read_u16()?;
@@ -101,25 +95,25 @@ where
                             self.out.write_u8(self.in_.read_u8()?)?;
                         }
                     }
-                    CompressionType::FixedHuffman => todo!(),
-                    CompressionType::DynamicHuffman => todo!(),
+                    DeflateEncoding::FixedHuffman => todo!(),
+                    DeflateEncoding::DynamicHuffman => todo!(),
                 }
 
                 if is_final {
                     self.out.flush_even_if_partial()?;
-                    self.stage = DecompressionStage::Complete;
+                    self.stage = DecodeStage::Complete;
                 } else {
-                    self.stage = DecompressionStage::NewBlock;
+                    self.stage = DecodeStage::NewBlock;
                 }
 
                 Ok(())
             }
-            DecompressionStage::Complete => Ok(()),
+            DecodeStage::Complete => Ok(()),
         }
     }
 
-    pub fn decompress(&mut self) -> io::Result<()> {
-        while !matches!(self.stage, DecompressionStage::Complete) {
+    pub fn decode(&mut self) -> io::Result<()> {
+        while !matches!(self.stage, DecodeStage::Complete) {
             self.advance_stage()?;
         }
 
@@ -128,19 +122,19 @@ where
 }
 
 #[derive(Debug)]
-enum CompressionStage {
+enum EncodeStage {
     NewBlock,
     Complete,
 }
 
 #[derive(Debug)]
-pub struct Compressor<R, W> {
+pub struct DeflateEncoder<R, W> {
     in_: R,
     out: W,
-    stage: CompressionStage,
+    stage: EncodeStage,
 }
 
-impl<R, W> Compressor<R, W>
+impl<R, W> DeflateEncoder<R, W>
 where
     R: io::Read,
     W: io::Write,
@@ -149,13 +143,13 @@ where
         Self {
             in_,
             out,
-            stage: CompressionStage::NewBlock,
+            stage: EncodeStage::NewBlock,
         }
     }
 
     fn advance_stage(&mut self) -> io::Result<()> {
         match self.stage {
-            CompressionStage::NewBlock => {
+            EncodeStage::NewBlock => {
                 const MAX_BYTES_PER_BLOCK: usize = u16::MAX as usize;
                 let mut buf = [0u8; MAX_BYTES_PER_BLOCK];
                 let mut len = 0;
@@ -183,8 +177,8 @@ where
                 let mut header_bits = bitvec![u8, Lsb0; 0; 0];
                 header_bits.push(is_eof.into());
 
-                let compression_bits = <BitVec<_>>::from(CompressionType::None);
-                header_bits.extend_from_bitslice(compression_bits.as_bitslice());
+                let encoding_bits = <BitVec<_>>::from(DeflateEncoding::NoCompression);
+                header_bits.extend_from_bitslice(encoding_bits.as_bitslice());
 
                 // Pad bits to a full byte
                 header_bits.resize(8, false);
@@ -201,17 +195,17 @@ where
 
                 if is_eof {
                     self.out.flush()?;
-                    self.stage = CompressionStage::Complete;
+                    self.stage = EncodeStage::Complete;
                 }
 
                 Ok(())
             }
-            CompressionStage::Complete => Ok(()),
+            EncodeStage::Complete => Ok(()),
         }
     }
 
-    pub fn compress(&mut self) -> io::Result<()> {
-        while !matches!(self.stage, CompressionStage::Complete) {
+    pub fn encode(&mut self) -> io::Result<()> {
+        while !matches!(self.stage, EncodeStage::Complete) {
             self.advance_stage()?;
         }
 

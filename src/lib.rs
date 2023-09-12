@@ -2,4 +2,4 @@ mod bit_io;
 mod deflate;
 mod lzss;
 
-pub use deflate::{Compressor, Decompressor};
+pub use deflate::{DeflateDecoder, DeflateEncoder};

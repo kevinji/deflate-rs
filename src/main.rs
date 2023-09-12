@@ -1,11 +1,11 @@
 use clap::{Parser, Subcommand};
-use deflate_rs::{Compressor, Decompressor};
+use deflate_rs::{DeflateDecoder, DeflateEncoder};
 use std::io;
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    Compress,
-    Decompress,
+    DeflateEncode,
+    DeflateDecode,
 }
 
 #[derive(Debug, Parser)]
@@ -17,14 +17,14 @@ struct Args {
 fn main() -> anyhow::Result<()> {
     let Args { command } = Args::try_parse()?;
     match command {
-        Command::Compress => {
-            let mut compressor = Compressor::new(io::stdin().lock(), io::stdout().lock());
-            compressor.compress()?;
+        Command::DeflateEncode => {
+            let mut encoder = DeflateEncoder::new(io::stdin().lock(), io::stdout().lock());
+            encoder.encode()?;
             Ok(())
         }
-        Command::Decompress => {
-            let mut decompressor = Decompressor::new(io::stdin().lock(), io::stdout().lock());
-            decompressor.decompress()?;
+        Command::DeflateDecode => {
+            let mut decoder = DeflateDecoder::new(io::stdin().lock(), io::stdout().lock());
+            decoder.decode()?;
             Ok(())
         }
     }
