@@ -51,14 +51,14 @@ impl ByteBuffer<ReadBuffer> {
         }
     }
 
-    fn read<T>(&mut self, bits: &mut BitSlice<T>) -> usize
+    fn read<T>(&mut self, slice: &mut BitSlice<T>) -> usize
     where
         T: BitStore,
     {
-        let bit_count = self.bits_left().min(bits.len());
-        let buffer_bits = self.byte.get(self.idx..self.idx + bit_count).unwrap();
+        let bit_count = self.bits_left().min(slice.len());
+        let buffer_bits = &self.byte[self.idx..self.idx + bit_count];
 
-        let bits_to_set = bits.get_mut(..bit_count).unwrap();
+        let bits_to_set = &mut slice[..bit_count];
         bits_to_set.clone_from_bitslice(buffer_bits);
 
         self.idx += bit_count;
@@ -103,20 +103,42 @@ where
         Ok(())
     }
 
-    pub fn read_exact<T>(&mut self, mut bits: &mut BitSlice<T>) -> io::Result<()>
+    pub fn read_exact<T>(&mut self, mut slice: &mut BitSlice<T>) -> io::Result<()>
     where
         T: BitStore,
     {
-        while !bits.is_empty() {
+        while !slice.is_empty() {
             if self.buffer.needs_flush() {
                 self.read_next_byte()?;
             }
 
-            let bit_read_count = self.buffer.read(bits);
-            bits = bits.get_mut(bit_read_count..).unwrap();
+            let bit_read_count = self.buffer.read(slice);
+            slice = &mut slice[bit_read_count..];
         }
 
         Ok(())
+    }
+
+    pub fn read_bool(&mut self) -> io::Result<bool> {
+        let mut arr = bitarr![u8, Lsb0; 0; 1];
+        self.read_exact(&mut arr)?;
+        Ok(arr[0])
+    }
+
+    pub fn read_u8(&mut self) -> io::Result<u8> {
+        let mut out = 0u8;
+        self.read_exact(out.view_bits_mut::<Lsb0>())?;
+        Ok(out)
+    }
+
+    pub fn read_u16(&mut self) -> io::Result<u16> {
+        let mut out = 0u16;
+        self.read_exact(out.view_bits_mut::<Lsb0>())?;
+        Ok(out)
+    }
+
+    pub fn skip_to_byte_end(&mut self) {
+        self.buffer.idx = <ByteBuffer<R>>::BITS;
     }
 }
 
@@ -129,14 +151,14 @@ impl ByteBuffer<WriteBuffer> {
         }
     }
 
-    fn write<T>(&mut self, bits: &BitSlice<T>) -> usize
+    fn write<T>(&mut self, slice: &BitSlice<T>) -> usize
     where
         T: BitStore,
     {
-        let bit_count = self.bits_left().min(bits.len());
-        let buffer_bits = self.byte.get_mut(self.idx..self.idx + bit_count).unwrap();
+        let bit_count = self.bits_left().min(slice.len());
+        let buffer_bits = &mut self.byte[self.idx..self.idx + bit_count];
 
-        let bits_to_get = bits.get(..bit_count).unwrap();
+        let bits_to_get = &slice[..bit_count];
         buffer_bits.clone_from_bitslice(bits_to_get);
 
         self.idx += bit_count;
@@ -180,19 +202,23 @@ where
         Ok(())
     }
 
-    pub fn write_all<T>(&mut self, mut bits: &mut BitSlice<T>) -> io::Result<()>
+    pub fn write_all<T>(&mut self, mut slice: &BitSlice<T>) -> io::Result<()>
     where
         T: BitStore,
     {
-        while !bits.is_empty() {
+        while !slice.is_empty() {
+            let bit_write_count = self.buffer.write(slice);
+            slice = &slice[bit_write_count..];
+
             if self.buffer.needs_flush() {
                 self.flush_even_if_partial()?;
             }
-
-            let bit_write_count = self.buffer.write(bits);
-            bits = bits.get_mut(bit_write_count..).unwrap();
         }
 
         Ok(())
+    }
+
+    pub fn write_u8(&mut self, byte: u8) -> io::Result<()> {
+        self.write_all(byte.view_bits::<Lsb0>())
     }
 }
