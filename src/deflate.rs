@@ -26,12 +26,12 @@ impl TryFrom<&BitSlice<u8>> for CompressionType {
     }
 }
 
-impl From<CompressionType> for BitArray<[u8; 1]> {
+impl From<CompressionType> for BitVec<u8> {
     fn from(compression_type: CompressionType) -> Self {
         match compression_type {
-            CompressionType::None => bitarr![u8, Lsb0; 0, 0],
-            CompressionType::FixedHuffman => bitarr![u8, Lsb0; 0, 1],
-            CompressionType::DynamicHuffman => bitarr![u8, Lsb0; 1, 0],
+            CompressionType::None => bitvec![u8, Lsb0; 0, 0],
+            CompressionType::FixedHuffman => bitvec![u8, Lsb0; 0, 1],
+            CompressionType::DynamicHuffman => bitvec![u8, Lsb0; 1, 0],
         }
     }
 }
@@ -71,9 +71,9 @@ where
             DecompressionStage::NewBlock => {
                 let is_final = self.in_.read_bool()?;
 
-                let mut compression_type_bits = bitarr![u8, Lsb0; 0; 2];
-                self.in_.read_exact(&mut compression_type_bits)?;
-                let compression_type = compression_type_bits.as_bitslice().try_into()?;
+                let compression_type_bits = bits![mut u8, Lsb0; 0; 2];
+                self.in_.read_exact(compression_type_bits)?;
+                let compression_type = (&*compression_type_bits).try_into()?;
 
                 self.stage = DecompressionStage::ParsedMode {
                     is_final,
@@ -129,7 +129,6 @@ where
 
 #[derive(Debug)]
 enum CompressionStage {
-    Begin,
     NewBlock,
     Complete,
 }
@@ -150,20 +149,12 @@ where
         Self {
             in_,
             out,
-            stage: CompressionStage::Begin,
+            stage: CompressionStage::NewBlock,
         }
     }
 
     fn advance_stage(&mut self) -> io::Result<()> {
         match self.stage {
-            CompressionStage::Begin => {
-                io::copy(
-                    &mut <BitArray<_>>::from(CompressionType::None).as_bitslice(),
-                    &mut self.out,
-                )?;
-                self.stage = CompressionStage::NewBlock;
-                Ok(())
-            }
             CompressionStage::NewBlock => {
                 const MAX_BYTES_PER_BLOCK: usize = u16::MAX as usize;
                 let mut buf = [0u8; MAX_BYTES_PER_BLOCK];
@@ -188,6 +179,17 @@ where
                         },
                     }
                 }
+
+                let mut header_bits = bitvec![u8, Lsb0; 0; 0];
+                header_bits.push(is_eof.into());
+
+                let compression_bits = <BitVec<_>>::from(CompressionType::None);
+                header_bits.extend_from_bitslice(compression_bits.as_bitslice());
+
+                // Pad bits to a full byte
+                header_bits.resize(8, false);
+
+                io::copy(&mut header_bits, &mut self.out)?;
 
                 // `.unwrap()` is safe because `len <= u16::MAX`
                 let len_header: u16 = len.try_into().unwrap();

@@ -120,8 +120,8 @@ where
     }
 
     pub fn read_bool(&mut self) -> io::Result<bool> {
-        let mut arr = bitarr![u8, Lsb0; 0; 1];
-        self.read_exact(&mut arr)?;
+        let arr = bits![mut u8, Lsb0; 0; 1];
+        self.read_exact(arr)?;
         Ok(arr[0])
     }
 
