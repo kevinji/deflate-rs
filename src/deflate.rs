@@ -26,6 +26,16 @@ impl TryFrom<&BitSlice<u8>> for CompressionType {
     }
 }
 
+impl From<CompressionType> for BitArray<[u8; 1]> {
+    fn from(compression_type: CompressionType) -> Self {
+        match compression_type {
+            CompressionType::None => bitarr![u8, Lsb0; 0, 0],
+            CompressionType::FixedHuffman => bitarr![u8, Lsb0; 0, 1],
+            CompressionType::DynamicHuffman => bitarr![u8, Lsb0; 1, 0],
+        }
+    }
+}
+
 #[derive(Debug)]
 enum DecompressionStage {
     NewBlock,
@@ -61,7 +71,7 @@ where
             DecompressionStage::NewBlock => {
                 let is_final = self.in_.read_bool()?;
 
-                let mut compression_type_bits = bitarr!(u8, Lsb0; 0; 2);
+                let mut compression_type_bits = bitarr![u8, Lsb0; 0; 2];
                 self.in_.read_exact(&mut compression_type_bits)?;
                 let compression_type = compression_type_bits.as_bitslice().try_into()?;
 
@@ -110,6 +120,96 @@ where
 
     pub fn decompress(&mut self) -> io::Result<()> {
         while !matches!(self.stage, DecompressionStage::Complete) {
+            self.advance_stage()?;
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+enum CompressionStage {
+    Begin,
+    NewBlock,
+    Complete,
+}
+
+#[derive(Debug)]
+pub struct Compressor<R, W> {
+    in_: R,
+    out: W,
+    stage: CompressionStage,
+}
+
+impl<R, W> Compressor<R, W>
+where
+    R: io::Read,
+    W: io::Write,
+{
+    pub fn new(in_: R, out: W) -> Self {
+        Self {
+            in_,
+            out,
+            stage: CompressionStage::Begin,
+        }
+    }
+
+    fn advance_stage(&mut self) -> io::Result<()> {
+        match self.stage {
+            CompressionStage::Begin => {
+                io::copy(
+                    &mut <BitArray<_>>::from(CompressionType::None).as_bitslice(),
+                    &mut self.out,
+                )?;
+                self.stage = CompressionStage::NewBlock;
+                Ok(())
+            }
+            CompressionStage::NewBlock => {
+                const MAX_BYTES_PER_BLOCK: usize = u16::MAX as usize;
+                let mut buf = [0u8; MAX_BYTES_PER_BLOCK];
+                let mut len = 0;
+                let mut is_eof = false;
+
+                loop {
+                    match self.in_.read(&mut buf[len..]) {
+                        Ok(0) => {
+                            is_eof = true;
+                            break;
+                        }
+                        Ok(n) => {
+                            len += n;
+                            if len == MAX_BYTES_PER_BLOCK {
+                                break;
+                            }
+                        }
+                        Err(err) => match err.kind() {
+                            io::ErrorKind::Interrupted => continue,
+                            _ => return Err(err),
+                        },
+                    }
+                }
+
+                // `.unwrap()` is safe because `len <= u16::MAX`
+                let len_header: u16 = len.try_into().unwrap();
+                let nlen_header = !len_header;
+
+                self.out.write_all(&len_header.to_le_bytes())?;
+                self.out.write_all(&nlen_header.to_le_bytes())?;
+                self.out.write_all(&buf[..len])?;
+
+                if is_eof {
+                    self.out.flush()?;
+                    self.stage = CompressionStage::Complete;
+                }
+
+                Ok(())
+            }
+            CompressionStage::Complete => Ok(()),
+        }
+    }
+
+    pub fn compress(&mut self) -> io::Result<()> {
+        while !matches!(self.stage, CompressionStage::Complete) {
             self.advance_stage()?;
         }
 

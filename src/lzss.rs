@@ -1,8 +1,5 @@
 /// A simple LZSS implementation for the Deflate encoder and decoder.
 
-/// Maximum lookback distance for an LZSS compressed block
-pub const MAX_DISTANCE: u16 = 32_768;
-
 #[derive(Debug)]
 pub enum Symbol {
     /// A literal byte
