@@ -71,9 +71,8 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    #[test]
-    fn test_back_reference_length_codes() {
-        let expected_lengths_by_code = vec![
+    fn expected_lengths_by_code() -> HashMap<u16, Vec<u16>> {
+        vec![
             (257, vec![3]),
             (258, vec![4]),
             (259, vec![5]),
@@ -105,24 +104,11 @@ mod tests {
             (285, vec![258]),
         ]
         .into_iter()
-        .collect::<HashMap<u16, Vec<u16>>>();
-
-        let mut actual_lengths_by_code = <HashMap<u16, Vec<u16>>>::new();
-        for length_minus_three in 0..=255 {
-            let length_code = Symbol::back_reference_length_code(length_minus_three);
-            let length = u16::from(length_minus_three) + 3;
-            actual_lengths_by_code
-                .entry(length_code)
-                .or_default()
-                .push(length);
-        }
-
-        assert_eq!(expected_lengths_by_code, actual_lengths_by_code);
+        .collect::<HashMap<u16, Vec<u16>>>()
     }
 
-    #[test]
-    fn test_back_reference_distance_codes() {
-        let expected_distances_by_code = vec![
+    fn expected_distances_by_code() -> HashMap<u8, Vec<u16>> {
+        vec![
             (0, vec![1]),
             (1, vec![2]),
             (2, vec![3]),
@@ -155,8 +141,26 @@ mod tests {
             (29, (24577..=32768).collect()),
         ]
         .into_iter()
-        .collect::<HashMap<u8, Vec<u16>>>();
+        .collect()
+    }
 
+    #[test]
+    fn test_back_reference_length_codes() {
+        let mut actual_lengths_by_code = <HashMap<u16, Vec<u16>>>::new();
+        for length_minus_three in 0..=255 {
+            let length_code = Symbol::back_reference_length_code(length_minus_three);
+            let length = u16::from(length_minus_three) + 3;
+            actual_lengths_by_code
+                .entry(length_code)
+                .or_default()
+                .push(length);
+        }
+
+        assert_eq!(expected_lengths_by_code(), actual_lengths_by_code);
+    }
+
+    #[test]
+    fn test_back_reference_distance_codes() {
         let mut actual_distances_by_code = <HashMap<u8, Vec<u16>>>::new();
         for distance_minus_one in 0..=32767 {
             let distance_code = Symbol::back_reference_distance_code(distance_minus_one);
@@ -167,6 +171,6 @@ mod tests {
                 .push(distance);
         }
 
-        assert_eq!(expected_distances_by_code, actual_distances_by_code);
+        assert_eq!(expected_distances_by_code(), actual_distances_by_code);
     }
 }
