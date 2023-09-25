@@ -1,6 +1,3 @@
-use num_traits::int::PrimInt;
-use std::io;
-
 #[derive(Debug)]
 pub enum Symbol {
     /// A literal byte
@@ -26,67 +23,6 @@ impl Symbol {
                 distance_minus_one: _,
             } => Self::back_reference_length_code(*length_minus_three),
         }
-    }
-
-    pub fn parse_length_code(
-        &self,
-        length_code: u16,
-        read_next_bit: impl Fn() -> io::Result<bool>,
-        read_distance_code: impl FnOnce() -> io::Result<u8>,
-    ) -> io::Result<Self> {
-        match length_code {
-            0..=255 => Ok(Self::Literal(length_code.try_into().unwrap())),
-            256 => Ok(Self::EndOfBlock),
-            257..=285 => {
-                let length_code_minus_257: u8 = (length_code - 257).try_into().unwrap();
-                let length_minus_three = match length_code_minus_257 {
-                    0..=7 => length_code_minus_257,
-                    8..=27 => {
-                        let extra_bit_count = length_code_minus_257 / 4 - 1;
-                        let extra_bits =
-                            Self::read_extra_bits::<u8>(extra_bit_count, &read_next_bit)?;
-
-                        (1 << (length_code_minus_257 / 4 + 1)) + extra_bits
-                    }
-                    28 => 255,
-                    29.. => unreachable!(),
-                };
-
-                let distance_code = read_distance_code()?;
-                let distance_minus_one = match distance_code {
-                    0..=3 => distance_code.into(),
-                    4..=29 => {
-                        let extra_bit_count = distance_code / 2 - 1;
-                        let extra_bits =
-                            Self::read_extra_bits::<u16>(extra_bit_count, &read_next_bit)?;
-
-                        (1 << (distance_code / 2)) + extra_bits
-                    }
-                    30.. => return Err(io::ErrorKind::InvalidData.into()),
-                };
-
-                Ok(Self::BackReference {
-                    length_minus_three,
-                    distance_minus_one,
-                })
-            }
-            286.. => Err(io::ErrorKind::InvalidData.into()),
-        }
-    }
-
-    fn read_extra_bits<T>(
-        extra_bit_count: u8,
-        read_next_bit: impl Fn() -> io::Result<bool>,
-    ) -> io::Result<T>
-    where
-        T: PrimInt + From<bool>,
-    {
-        let mut extra_bits = T::zero();
-        for _ in 0..extra_bit_count {
-            let bit = read_next_bit()?;
-            extra_bits = (extra_bits << 1) + bit.into();
-        }
-        Ok(extra_bits)
     }
 
     pub fn back_reference_length_code(length_minus_three: u8) -> u16 {

@@ -1,5 +1,10 @@
-use crate::bit_io::{BitReader, BitWriter};
+use crate::{
+    bit_io::{BitReader, BitWriter},
+    huffman::HuffmanTree,
+    lzss::Symbol,
+};
 use bitvec::prelude::*;
+use num_traits::int::PrimInt;
 use std::io;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -34,6 +39,68 @@ impl From<DeflateEncoding> for BitVec<u8> {
             DeflateEncoding::DynamicHuffman => bitvec![u8, Lsb0; 1, 0],
         }
     }
+}
+
+fn parse_symbol<R>(
+    length_huffman_tree: &HuffmanTree,
+    distance_huffman_tree: &HuffmanTree,
+    in_: &mut BitReader<R>,
+) -> io::Result<Symbol>
+where
+    R: io::Read,
+{
+    let length_code = length_huffman_tree.decode(in_)?;
+
+    match length_code {
+        0..=255 => Ok(Symbol::Literal(length_code.try_into().unwrap())),
+        256 => Ok(Symbol::EndOfBlock),
+        257..=285 => {
+            let length_code_minus_257: u8 = (length_code - 257).try_into().unwrap();
+            let length_minus_three = match length_code_minus_257 {
+                0..=7 => length_code_minus_257,
+                8..=27 => {
+                    let extra_bit_count = length_code_minus_257 / 4 - 1;
+                    let extra_bits = read_extra_bits::<_, u8>(extra_bit_count, in_)?;
+
+                    (1 << (length_code_minus_257 / 4 + 1)) + extra_bits
+                }
+                28 => 255,
+                29.. => unreachable!(),
+            };
+
+            // TODO: Perhaps restrict `distance_huffman_tree` to u8
+            let distance_code = u8::try_from(distance_huffman_tree.decode(in_)?).unwrap();
+            let distance_minus_one = match distance_code {
+                0..=3 => distance_code.into(),
+                4..=29 => {
+                    let extra_bit_count = distance_code / 2 - 1;
+                    let extra_bits = read_extra_bits::<_, u16>(extra_bit_count, in_)?;
+
+                    (1 << (distance_code / 2)) + extra_bits
+                }
+                30.. => return Err(io::ErrorKind::InvalidData.into()),
+            };
+
+            Ok(Symbol::BackReference {
+                length_minus_three,
+                distance_minus_one,
+            })
+        }
+        286.. => Err(io::ErrorKind::InvalidData.into()),
+    }
+}
+
+fn read_extra_bits<R, T>(extra_bit_count: u8, in_: &mut BitReader<R>) -> io::Result<T>
+where
+    R: io::Read,
+    T: PrimInt + From<bool>,
+{
+    let mut extra_bits = T::zero();
+    for _ in 0..extra_bit_count {
+        let bit = in_.read_bool()?;
+        extra_bits = (extra_bits << 1) + bit.into();
+    }
+    Ok(extra_bits)
 }
 
 #[derive(Debug)]
@@ -95,7 +162,33 @@ where
                             self.out.write_u8(self.in_.read_u8()?)?;
                         }
                     }
-                    DeflateEncoding::FixedHuffman => todo!(),
+                    DeflateEncoding::FixedHuffman => {
+                        let literal_huffman_tree = HuffmanTree::fixed_literal();
+                        let distance_huffman_tree = HuffmanTree::fixed_distance();
+
+                        loop {
+                            let length_symbol = parse_symbol(
+                                &literal_huffman_tree,
+                                &distance_huffman_tree,
+                                &mut self.in_,
+                            )?;
+
+                            match length_symbol {
+                                Symbol::Literal(literal) => {
+                                    self.out.write_u8(literal)?;
+                                }
+                                Symbol::EndOfBlock => {
+                                    break;
+                                }
+                                Symbol::BackReference {
+                                    length_minus_three: _,
+                                    distance_minus_one: _,
+                                } => {
+                                    todo!();
+                                }
+                            }
+                        }
+                    }
                     DeflateEncoding::DynamicHuffman => todo!(),
                 }
 
@@ -175,9 +268,9 @@ where
                 }
 
                 let mut header_bits = bitvec![u8, Lsb0; 0; 0];
-                header_bits.push(is_eof.into());
+                header_bits.push(is_eof);
 
-                let encoding_bits = <BitVec<_>>::from(DeflateEncoding::NoCompression);
+                let encoding_bits = BitVec::from(DeflateEncoding::NoCompression);
                 header_bits.extend_from_bitslice(encoding_bits.as_bitslice());
 
                 // Pad bits to a full byte
