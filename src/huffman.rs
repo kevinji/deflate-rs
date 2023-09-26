@@ -4,13 +4,12 @@ use std::{collections::BTreeMap, io};
 
 // Type should be `[u8; 288]` if `.concat()` could be used in `const` contexts
 const FIXED_LITERAL_CODE_LENGTHS: [&[u8]; 4] = [&[8; 144], &[9; 112], &[7; 24], &[8; 8]];
-const FIXED_DISTANCE_CODE_LENGTHS: [u8; 30] = [5; 30];
 
 const DYNAMIC_CODE_LENGTH_SYMBOLS: [u8; 19] = [
     16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15,
 ];
 
-fn compute_heap_index(code: u16, code_len: usize) -> usize {
+fn compute_heap_index(code: u32, code_len: usize) -> usize {
     let code_bits = &code.view_bits::<Lsb0>()[..code_len];
     let mut index = 1;
     for bit in code_bits.iter().by_vals().rev() {
@@ -32,7 +31,7 @@ impl HuffmanTree {
         let code_length_counts =
             code_lengths
                 .iter()
-                .fold(<BTreeMap<_, u16>>::new(), |mut map, &length| {
+                .fold(<BTreeMap<_, u32>>::new(), |mut map, &length| {
                     *map.entry(length).or_default() += 1;
                     map
                 });
@@ -72,10 +71,6 @@ impl HuffmanTree {
         Self::from_code_lengths(&FIXED_LITERAL_CODE_LENGTHS.concat())
     }
 
-    pub fn fixed_distance() -> Self {
-        Self::from_code_lengths(&FIXED_DISTANCE_CODE_LENGTHS)
-    }
-
     pub fn dynamic_code_lengths(code_lengths_in_symbol_order: &[u8]) -> Self {
         assert!(code_lengths_in_symbol_order.len() <= DYNAMIC_CODE_LENGTH_SYMBOLS.len());
 
@@ -111,7 +106,7 @@ impl HuffmanTree {
 
     pub fn decode_code_lengths<R>(
         &self,
-        code_length_count: u16,
+        code_length_count: usize,
         in_: &mut BitReader<R>,
     ) -> io::Result<Self>
     where
@@ -120,7 +115,7 @@ impl HuffmanTree {
         let mut code_lengths = vec![];
         let mut prev_code_length = None;
 
-        for _ in 0..code_length_count {
+        while code_lengths.len() < code_length_count {
             let symbol: u8 = self.decode(in_)?.try_into().unwrap();
             match symbol {
                 0..=15 => {
@@ -128,7 +123,7 @@ impl HuffmanTree {
                     prev_code_length = Some(symbol);
                 }
                 16 => {
-                    let repeat = in_.read_u8_from_msb_bits(2)? + 3;
+                    let repeat = in_.read_u8_from_bits(2)? + 3;
                     let Some(prev_code_length) = prev_code_length else {
                         return Err(io::ErrorKind::InvalidData.into());
                     };
@@ -136,13 +131,13 @@ impl HuffmanTree {
                     code_lengths.resize(code_lengths.len() + usize::from(repeat), prev_code_length);
                 }
                 17 => {
-                    let repeat = in_.read_u8_from_msb_bits(3)? + 3;
+                    let repeat = in_.read_u8_from_bits(3)? + 3;
                     code_lengths.resize(code_lengths.len() + usize::from(repeat), 0);
 
                     prev_code_length = Some(0);
                 }
                 18 => {
-                    let repeat = in_.read_u8_from_msb_bits(7)? + 11;
+                    let repeat = in_.read_u8_from_bits(7)? + 11;
                     code_lengths.resize(code_lengths.len() + usize::from(repeat), 0);
 
                     prev_code_length = Some(0);
@@ -151,7 +146,30 @@ impl HuffmanTree {
             }
         }
 
+        if code_lengths.len() > code_length_count {
+            return Err(io::ErrorKind::InvalidData.into());
+        }
+
         Ok(Self::from_code_lengths(&code_lengths))
+    }
+}
+
+// TODO: Perhaps restrict `HuffmanTree` in `Dynamic` to u8
+#[derive(Debug)]
+pub enum DistanceEncoding {
+    Fixed,
+    Dynamic(HuffmanTree),
+}
+
+impl DistanceEncoding {
+    pub fn decode<R>(&self, in_: &mut BitReader<R>) -> io::Result<u16>
+    where
+        R: io::Read,
+    {
+        match self {
+            Self::Fixed => in_.read_u16_from_bits(5),
+            Self::Dynamic(tree) => tree.decode(in_),
+        }
     }
 }
 
@@ -191,11 +209,5 @@ mod tests {
         assert_decode(&tree, 9, 0b110010000..=0b111111111, 144..=255);
         assert_decode(&tree, 7, 0b0000000..=0b0010111, 256..=279);
         assert_decode(&tree, 8, 0b11000000..=0b11000111, 280..=287);
-    }
-
-    #[test]
-    fn test_fixed_distance_huffman() {
-        let tree = HuffmanTree::fixed_distance();
-        assert_decode(&tree, 5, 0b00000..=0b11101, 0..=29);
     }
 }

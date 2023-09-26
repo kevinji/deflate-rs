@@ -51,10 +51,9 @@ impl ByteBuffer<ReadBuffer> {
         }
     }
 
-    fn read<T, O>(&mut self, slice: &mut BitSlice<T, O>) -> usize
+    fn read<T>(&mut self, slice: &mut BitSlice<T>) -> usize
     where
         T: BitStore,
-        O: BitOrder,
     {
         let bit_count = self.bits_left().min(slice.len());
         let buffer_bits = &self.byte[self.idx..self.idx + bit_count];
@@ -104,10 +103,9 @@ where
         Ok(())
     }
 
-    pub fn read_exact<T, O>(&mut self, mut slice: &mut BitSlice<T, O>) -> io::Result<()>
+    pub fn read_exact<T>(&mut self, mut slice: &mut BitSlice<T>) -> io::Result<()>
     where
         T: BitStore,
-        O: BitOrder,
     {
         while !slice.is_empty() {
             if self.buffer.needs_flush() {
@@ -127,32 +125,30 @@ where
         Ok(arr[0])
     }
 
+    pub fn read_u8_from_bits(&mut self, bit_count: usize) -> io::Result<u8> {
+        assert!(bit_count <= 8);
+        let mut bv = <BitVec<u8>>::with_capacity(bit_count);
+        bv.resize(bit_count, false);
+
+        self.read_exact(bv.as_mut_bitslice())?;
+        Ok(bv.load_le::<u8>())
+    }
+
     pub fn read_u8(&mut self) -> io::Result<u8> {
-        let mut out = 0u8;
-        self.read_exact(out.view_bits_mut::<Lsb0>())?;
-        Ok(out)
+        self.read_u8_from_bits(8)
+    }
+
+    pub fn read_u16_from_bits(&mut self, bit_count: usize) -> io::Result<u16> {
+        assert!(bit_count <= 16);
+        let mut bv = <BitVec<u16>>::with_capacity(bit_count);
+        bv.resize(bit_count, false);
+
+        self.read_exact(bv.as_mut_bitslice())?;
+        Ok(bv.load_le::<u16>())
     }
 
     pub fn read_u16(&mut self) -> io::Result<u16> {
-        let mut out = 0u16;
-        self.read_exact(out.view_bits_mut::<Lsb0>())?;
-        Ok(out)
-    }
-
-    pub fn read_u8_from_msb_bits(&mut self, bit_count: usize) -> io::Result<u8> {
-        let mut bv = <BitVec<u8, Msb0>>::with_capacity(bit_count);
-        bv.resize(bit_count, false);
-
-        self.read_exact(bv.as_mut_bitslice())?;
-        Ok(bv.load::<u8>())
-    }
-
-    pub fn read_u16_from_msb_bits(&mut self, bit_count: usize) -> io::Result<u16> {
-        let mut bv = <BitVec<u16, Msb0>>::with_capacity(bit_count);
-        bv.resize(bit_count, false);
-
-        self.read_exact(bv.as_mut_bitslice())?;
-        Ok(bv.load::<u16>())
+        self.read_u16_from_bits(16)
     }
 
     pub fn skip_to_byte_end(&mut self) {

@@ -1,6 +1,6 @@
 use crate::{
     bit_io::BitReader,
-    huffman::HuffmanTree,
+    huffman::{DistanceEncoding, HuffmanTree},
     lzss::{OutBuffer, Symbol},
 };
 use bitvec::prelude::*;
@@ -21,28 +21,30 @@ impl TryFrom<&BitSlice<u8>> for DeflateEncoding {
             return Err(io::ErrorKind::InvalidData.into());
         }
 
-        match (slice[0], slice[1]) {
-            (false, false) => Ok(Self::NoCompression),
-            (false, true) => Ok(Self::FixedHuffman),
-            (true, false) => Ok(Self::DynamicHuffman),
-            (true, true) => Err(io::ErrorKind::InvalidData.into()),
+        match slice.load_le::<u8>() {
+            0b00 => Ok(Self::NoCompression),
+            0b01 => Ok(Self::FixedHuffman),
+            0b10 => Ok(Self::DynamicHuffman),
+            0b11 => Err(io::ErrorKind::InvalidData.into()),
+            _ => unreachable!(),
         }
     }
 }
 
 impl From<DeflateEncoding> for BitVec<u8> {
     fn from(encoding: DeflateEncoding) -> Self {
-        match encoding {
-            DeflateEncoding::NoCompression => bitvec![u8, Lsb0; 0, 0],
-            DeflateEncoding::FixedHuffman => bitvec![u8, Lsb0; 0, 1],
-            DeflateEncoding::DynamicHuffman => bitvec![u8, Lsb0; 1, 0],
-        }
+        let bits: u8 = match encoding {
+            DeflateEncoding::NoCompression => 0b00,
+            DeflateEncoding::FixedHuffman => 0b01,
+            DeflateEncoding::DynamicHuffman => 0b10,
+        };
+        Self::from_element(bits)
     }
 }
 
 fn parse_symbol<R>(
     length_huffman_tree: &HuffmanTree,
-    distance_huffman_tree: &HuffmanTree,
+    distance_encoding: &DistanceEncoding,
     in_: &mut BitReader<R>,
 ) -> io::Result<Symbol>
 where
@@ -59,23 +61,26 @@ where
                 0..=7 => length_code_minus_257,
                 8..=27 => {
                     let extra_bit_count = length_code_minus_257 / 4 - 1;
-                    let extra_bits = in_.read_u8_from_msb_bits(extra_bit_count.into())?;
+                    let extra_bits = in_.read_u8_from_bits(extra_bit_count.into())?;
 
-                    (1 << (length_code_minus_257 / 4 + 1)) + extra_bits
+                    (1 << (length_code_minus_257 / 4 + 1))
+                        + (1 << (length_code_minus_257 / 4 - 1)) * (length_code_minus_257 % 4)
+                        + extra_bits
                 }
                 28 => 255,
                 29.. => unreachable!(),
             };
 
-            // TODO: Perhaps restrict `distance_huffman_tree` to u8
-            let distance_code: u8 = distance_huffman_tree.decode(in_)?.try_into().unwrap();
+            let distance_code: u8 = distance_encoding.decode(in_)?.try_into().unwrap();
             let distance_minus_one = match distance_code {
                 0..=3 => distance_code.into(),
                 4..=29 => {
                     let extra_bit_count = distance_code / 2 - 1;
-                    let extra_bits = in_.read_u16_from_msb_bits(extra_bit_count.into())?;
+                    let extra_bits = in_.read_u16_from_bits(extra_bit_count.into())?;
 
-                    (1 << (distance_code / 2)) + extra_bits
+                    (1 << (distance_code / 2))
+                        + (1 << (distance_code / 2 - 1)) * u16::from(distance_code % 2)
+                        + extra_bits
                 }
                 30.. => return Err(io::ErrorKind::InvalidData.into()),
             };
@@ -153,20 +158,18 @@ where
                     }
                     DeflateEncoding::FixedHuffman => {
                         let literal_huffman_tree = HuffmanTree::fixed_literal();
-                        let distance_huffman_tree = HuffmanTree::fixed_distance();
 
-                        self.decode_huffman_block(&literal_huffman_tree, &distance_huffman_tree)?;
+                        self.decode_huffman_block(&literal_huffman_tree, &DistanceEncoding::Fixed)?;
                     }
                     DeflateEncoding::DynamicHuffman => {
-                        let literal_code_length_count =
-                            u16::from(self.in_.read_u8_from_msb_bits(5)?) + 257;
-                        let distance_code_length_count = self.in_.read_u8_from_msb_bits(5)? + 1;
-                        let code_length_symbol_count = self.in_.read_u8_from_msb_bits(4)? + 4;
+                        let literal_code_length_count = self.in_.read_u16_from_bits(5)? + 257;
+                        let distance_code_length_count = self.in_.read_u8_from_bits(5)? + 1;
+                        let code_length_symbol_count = self.in_.read_u8_from_bits(4)? + 4;
 
                         let mut code_lengths_in_symbol_order =
                             Vec::with_capacity(code_length_symbol_count.into());
                         for _ in 0..code_length_symbol_count {
-                            let code_length = self.in_.read_u8_from_msb_bits(3)?;
+                            let code_length = self.in_.read_u8_from_bits(3)?;
                             code_lengths_in_symbol_order.push(code_length);
                         }
 
@@ -174,14 +177,17 @@ where
                             HuffmanTree::dynamic_code_lengths(&code_lengths_in_symbol_order);
 
                         let literal_huffman_tree = code_lengths_huffman_tree
-                            .decode_code_lengths(literal_code_length_count, &mut self.in_)?;
+                            .decode_code_lengths(literal_code_length_count.into(), &mut self.in_)?;
 
                         let distance_huffman_tree = code_lengths_huffman_tree.decode_code_lengths(
                             distance_code_length_count.into(),
                             &mut self.in_,
                         )?;
 
-                        self.decode_huffman_block(&literal_huffman_tree, &distance_huffman_tree)?;
+                        self.decode_huffman_block(
+                            &literal_huffman_tree,
+                            &DistanceEncoding::Dynamic(distance_huffman_tree),
+                        )?;
                     }
                 }
 
@@ -201,11 +207,11 @@ where
     fn decode_huffman_block(
         &mut self,
         literal_huffman_tree: &HuffmanTree,
-        distance_huffman_tree: &HuffmanTree,
+        distance_encoding: &DistanceEncoding,
     ) -> io::Result<()> {
         loop {
             let length_symbol =
-                parse_symbol(literal_huffman_tree, distance_huffman_tree, &mut self.in_)?;
+                parse_symbol(literal_huffman_tree, distance_encoding, &mut self.in_)?;
 
             match length_symbol {
                 Symbol::Literal(literal) => {
