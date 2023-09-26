@@ -1,3 +1,7 @@
+use std::collections::VecDeque;
+
+const MAX_DISTANCE_BYTES: usize = 32768;
+
 #[derive(Debug)]
 pub enum Symbol {
     /// A literal byte
@@ -51,7 +55,7 @@ impl Symbol {
                 let log2: u8 = distance_minus_one.ilog2().try_into().unwrap();
                 2 * log2 + u8::try_from(distance_minus_one >> (log2 - 1) & 1).unwrap()
             }
-            32768.. => panic!("Distance cannot be more than 32768"),
+            32768.. => panic!("Distance cannot be more than {MAX_DISTANCE_BYTES}"),
         }
     }
 
@@ -59,8 +63,29 @@ impl Symbol {
         match distance_minus_one {
             0..=3 => 0,
             4..=32767 => u8::try_from(distance_minus_one.ilog2()).unwrap() - 1,
-            32768.. => panic!("Distance cannot be more than 32768"),
+            32768.. => panic!("Distance cannot be more than {MAX_DISTANCE_BYTES}"),
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct OutBuffer(VecDeque<u8>);
+
+impl OutBuffer {
+    pub fn new() -> Self {
+        Self(VecDeque::new())
+    }
+
+    pub fn push(&mut self, byte: u8) {
+        if self.0.len() == MAX_DISTANCE_BYTES {
+            self.0.pop_back();
+        }
+
+        self.0.push_front(byte);
+    }
+
+    pub fn get(&self, distance_minus_one: usize) -> Option<u8> {
+        Some(*self.0.get(distance_minus_one)?)
     }
 }
 

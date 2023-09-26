@@ -2,8 +2,13 @@ use crate::bit_io::BitReader;
 use bitvec::prelude::*;
 use std::{collections::BTreeMap, io};
 
+// Type should be `[u8; 288]` if `.concat()` could be used in `const` contexts
 const FIXED_LITERAL_CODE_LENGTHS: [&[u8]; 4] = [&[8; 144], &[9; 112], &[7; 24], &[8; 8]];
 const FIXED_DISTANCE_CODE_LENGTHS: [u8; 30] = [5; 30];
+
+const DYNAMIC_CODE_LENGTH_SYMBOLS: [u8; 19] = [
+    16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15,
+];
 
 fn compute_heap_index(code: u16, code_len: usize) -> usize {
     let code_bits = &code.view_bits::<Lsb0>()[..code_len];
@@ -54,7 +59,7 @@ impl HuffmanTree {
             let code = next_code[code_len];
 
             let heap_index = compute_heap_index(code, code_len);
-            let heap_symbol = u16::try_from(symbol).unwrap();
+            let heap_symbol: u16 = symbol.try_into().unwrap();
             tree[heap_index] = Some(heap_symbol);
 
             next_code[code_len] += 1;
@@ -63,17 +68,26 @@ impl HuffmanTree {
         Self { tree }
     }
 
-    /// Fixed literal tree:
-    /// 0-143: 0011 -> 10 (8 bits) -> 144 (18*8)
-    /// 144-255: 11001 -> 1101, 111 (9 bits) -> 112 (14*8)
-    /// 256-279: 000 -> 0010 (7 bits) -> 24 (3*8)
-    /// 280-287: 11000 (8 bits) -> 8 (1*8)
     pub fn fixed_literal() -> Self {
         Self::from_code_lengths(&FIXED_LITERAL_CODE_LENGTHS.concat())
     }
 
     pub fn fixed_distance() -> Self {
         Self::from_code_lengths(&FIXED_DISTANCE_CODE_LENGTHS)
+    }
+
+    pub fn dynamic_code_lengths(code_lengths_in_symbol_order: &[u8]) -> Self {
+        assert!(code_lengths_in_symbol_order.len() <= DYNAMIC_CODE_LENGTH_SYMBOLS.len());
+
+        let mut code_lengths = [0; DYNAMIC_CODE_LENGTH_SYMBOLS.len()];
+        for (symbol, &code_length) in DYNAMIC_CODE_LENGTH_SYMBOLS
+            .into_iter()
+            .zip(code_lengths_in_symbol_order)
+        {
+            code_lengths[usize::from(symbol)] = code_length;
+        }
+
+        Self::from_code_lengths(&code_lengths)
     }
 
     pub fn decode<R>(&self, in_: &mut BitReader<R>) -> io::Result<u16>
@@ -93,6 +107,51 @@ impl HuffmanTree {
                 return Ok(symbol);
             }
         }
+    }
+
+    pub fn decode_code_lengths<R>(
+        &self,
+        code_length_count: u16,
+        in_: &mut BitReader<R>,
+    ) -> io::Result<Self>
+    where
+        R: io::Read,
+    {
+        let mut code_lengths = vec![];
+        let mut prev_code_length = None;
+
+        for _ in 0..code_length_count {
+            let symbol: u8 = self.decode(in_)?.try_into().unwrap();
+            match symbol {
+                0..=15 => {
+                    code_lengths.push(symbol);
+                    prev_code_length = Some(symbol);
+                }
+                16 => {
+                    let repeat = in_.read_u8_from_msb_bits(2)? + 3;
+                    let Some(prev_code_length) = prev_code_length else {
+                        return Err(io::ErrorKind::InvalidData.into());
+                    };
+
+                    code_lengths.resize(code_lengths.len() + usize::from(repeat), prev_code_length);
+                }
+                17 => {
+                    let repeat = in_.read_u8_from_msb_bits(3)? + 3;
+                    code_lengths.resize(code_lengths.len() + usize::from(repeat), 0);
+
+                    prev_code_length = Some(0);
+                }
+                18 => {
+                    let repeat = in_.read_u8_from_msb_bits(7)? + 11;
+                    code_lengths.resize(code_lengths.len() + usize::from(repeat), 0);
+
+                    prev_code_length = Some(0);
+                }
+                19.. => return Err(io::ErrorKind::InvalidData.into()),
+            }
+        }
+
+        Ok(Self::from_code_lengths(&code_lengths))
     }
 }
 
