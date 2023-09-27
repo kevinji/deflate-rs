@@ -1,5 +1,4 @@
 use crate::bit_io::BitReader;
-use bitvec::prelude::*;
 use std::{collections::BTreeMap, io};
 
 // Type should be `[u8; 288]` if `.concat()` could be used in `const` contexts
@@ -9,14 +8,8 @@ const DYNAMIC_CODE_LENGTH_SYMBOLS: [u8; 19] = [
     16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15,
 ];
 
-fn compute_heap_index(code: u32, code_len: usize) -> usize {
-    let code_bits = &code.view_bits::<Lsb0>()[..code_len];
-    let mut index = 1;
-    for bit in code_bits.iter().by_vals().rev() {
-        index = 2 * index + usize::from(bit);
-    }
-
-    index
+fn compute_heap_index(code: usize, code_len: usize) -> usize {
+    code | (1 << code_len)
 }
 
 #[derive(Debug)]
@@ -28,20 +21,20 @@ pub struct HuffmanTree {
 
 impl HuffmanTree {
     pub fn from_code_lengths(code_lengths: &[u8]) -> Self {
-        let code_length_counts =
-            code_lengths
-                .iter()
-                .fold(<BTreeMap<_, u32>>::new(), |mut map, &length| {
-                    *map.entry(length).or_default() += 1;
-                    map
-                });
+        let code_length_counts = code_lengths.iter().filter(|&&length| length > 0).fold(
+            <BTreeMap<_, u16>>::new(),
+            |mut map, &length| {
+                *map.entry(length).or_default() += 1;
+                map
+            },
+        );
 
         let largest_code_length = code_length_counts
             .last_key_value()
             .map_or(0, |(&code_len, _)| code_len);
 
-        let mut next_code = vec![0];
-        let mut code = 0;
+        let mut next_code = vec![0u16];
+        let mut code = 0u16;
 
         for length in 1..=largest_code_length {
             let count = code_length_counts
@@ -54,8 +47,12 @@ impl HuffmanTree {
 
         let mut tree = vec![None; 1 << (largest_code_length + 1)];
         for (symbol, &code_len) in code_lengths.iter().enumerate() {
+            if code_len == 0 {
+                continue;
+            }
+
             let code_len = usize::from(code_len);
-            let code = next_code[code_len];
+            let code: usize = next_code[code_len].try_into().unwrap();
 
             let heap_index = compute_heap_index(code, code_len);
             let heap_symbol: u16 = symbol.try_into().unwrap();
@@ -176,6 +173,7 @@ impl DistanceEncoding {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitvec::prelude::*;
 
     fn literal_bits<'a>(literal: u16, bit_len: usize) -> BitReader<BitVec<u16, Lsb0>> {
         let mut vec = BitVec::from(&literal.view_bits::<Lsb0>()[..bit_len]);
