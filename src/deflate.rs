@@ -105,35 +105,31 @@ enum DecodeStage {
 }
 
 #[derive(Debug)]
-pub struct DeflateDecoder<R, W> {
-    in_: BitReader<R>,
-    out: W,
+pub struct DeflateDecoder {
     /// Stores a 32k buffer when blocks are compressed
     out_buffer: OutBuffer,
     stage: DecodeStage,
 }
 
-impl<R, W> DeflateDecoder<R, W>
-where
-    R: io::Read,
-    W: io::Write,
-{
-    pub fn new(in_: R, out: W) -> Self {
+impl DeflateDecoder {
+    pub fn new() -> Self {
         Self {
-            in_: BitReader::new(in_),
-            out,
             out_buffer: OutBuffer::new(),
             stage: DecodeStage::NewBlock,
         }
     }
 
-    fn advance_stage(&mut self) -> io::Result<()> {
+    fn advance_stage<R, W>(&mut self, in_: &mut BitReader<R>, out: &mut W) -> io::Result<()>
+    where
+        R: io::Read,
+        W: io::Write,
+    {
         match self.stage {
             DecodeStage::NewBlock => {
-                let is_final = self.in_.read_bool()?;
+                let is_final = in_.read_bool()?;
 
                 let encoding_bits = bits![mut u8, Lsb0; 0; 2];
-                self.in_.read_exact(encoding_bits)?;
+                in_.read_exact(encoding_bits)?;
                 let encoding = (&*encoding_bits).try_into()?;
 
                 self.stage = DecodeStage::ParsedMode { is_final, encoding };
@@ -143,33 +139,38 @@ where
             DecodeStage::ParsedMode { is_final, encoding } => {
                 match encoding {
                     DeflateEncoding::NoCompression => {
-                        self.in_.skip_to_byte_end();
+                        in_.skip_to_byte_end();
 
-                        let len = self.in_.read_u16()?;
-                        let nlen = self.in_.read_u16()?;
+                        let len = in_.read_u16()?;
+                        let nlen = in_.read_u16()?;
 
                         if !len != nlen {
                             return Err(io::ErrorKind::InvalidData.into());
                         }
 
                         for _ in 0..len {
-                            self.out.write_all(&[self.in_.read_u8()?])?;
+                            out.write_all(&[in_.read_u8()?])?;
                         }
                     }
                     DeflateEncoding::FixedHuffman => {
                         let literal_huffman_tree = HuffmanTree::fixed_literal();
 
-                        self.decode_huffman_block(&literal_huffman_tree, &DistanceEncoding::Fixed)?;
+                        self.decode_huffman_block(
+                            in_,
+                            out,
+                            &literal_huffman_tree,
+                            &DistanceEncoding::Fixed,
+                        )?;
                     }
                     DeflateEncoding::DynamicHuffman => {
-                        let literal_code_length_count = self.in_.read_u16_from_bits(5)? + 257;
-                        let distance_code_length_count = self.in_.read_u8_from_bits(5)? + 1;
-                        let code_length_symbol_count = self.in_.read_u8_from_bits(4)? + 4;
+                        let literal_code_length_count = in_.read_u16_from_bits(5)? + 257;
+                        let distance_code_length_count = in_.read_u8_from_bits(5)? + 1;
+                        let code_length_symbol_count = in_.read_u8_from_bits(4)? + 4;
 
                         let mut code_lengths_in_symbol_order =
                             Vec::with_capacity(code_length_symbol_count.into());
                         for _ in 0..code_length_symbol_count {
-                            let code_length = self.in_.read_u8_from_bits(3)?;
+                            let code_length = in_.read_u8_from_bits(3)?;
                             code_lengths_in_symbol_order.push(code_length);
                         }
 
@@ -177,14 +178,14 @@ where
                             HuffmanTree::dynamic_code_lengths(&code_lengths_in_symbol_order);
 
                         let literal_huffman_tree = code_lengths_huffman_tree
-                            .decode_code_lengths(literal_code_length_count.into(), &mut self.in_)?;
+                            .decode_code_lengths(literal_code_length_count.into(), in_)?;
 
-                        let distance_huffman_tree = code_lengths_huffman_tree.decode_code_lengths(
-                            distance_code_length_count.into(),
-                            &mut self.in_,
-                        )?;
+                        let distance_huffman_tree = code_lengths_huffman_tree
+                            .decode_code_lengths(distance_code_length_count.into(), in_)?;
 
                         self.decode_huffman_block(
+                            in_,
+                            out,
                             &literal_huffman_tree,
                             &DistanceEncoding::Dynamic(distance_huffman_tree),
                         )?;
@@ -192,7 +193,7 @@ where
                 }
 
                 if is_final {
-                    self.out.flush()?;
+                    out.flush()?;
                     self.stage = DecodeStage::Complete;
                 } else {
                     self.stage = DecodeStage::NewBlock;
@@ -204,18 +205,23 @@ where
         }
     }
 
-    fn decode_huffman_block(
+    fn decode_huffman_block<R, W>(
         &mut self,
+        in_: &mut BitReader<R>,
+        out: &mut W,
         literal_huffman_tree: &HuffmanTree,
         distance_encoding: &DistanceEncoding,
-    ) -> io::Result<()> {
+    ) -> io::Result<()>
+    where
+        R: io::Read,
+        W: io::Write,
+    {
         loop {
-            let length_symbol =
-                parse_symbol(literal_huffman_tree, distance_encoding, &mut self.in_)?;
+            let length_symbol = parse_symbol(literal_huffman_tree, distance_encoding, in_)?;
 
             match length_symbol {
                 Symbol::Literal(literal) => {
-                    self.out.write_all(&[literal])?;
+                    out.write_all(&[literal])?;
                     self.out_buffer.push(literal);
                 }
                 Symbol::EndOfBlock => {
@@ -232,7 +238,7 @@ where
                             .get(distance_minus_one.into())
                             .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData))?;
 
-                        self.out.write_all(&[byte])?;
+                        out.write_all(&[byte])?;
                         self.out_buffer.push(byte);
                     }
                 }
@@ -240,9 +246,13 @@ where
         }
     }
 
-    pub fn decode(&mut self) -> io::Result<()> {
+    pub fn decode<R, W>(&mut self, in_: &mut BitReader<R>, out: &mut W) -> io::Result<()>
+    where
+        R: io::Read,
+        W: io::Write,
+    {
         while !matches!(self.stage, DecodeStage::Complete) {
-            self.advance_stage()?;
+            self.advance_stage(in_, out)?;
         }
 
         Ok(())
@@ -256,26 +266,22 @@ enum EncodeStage {
 }
 
 #[derive(Debug)]
-pub struct DeflateEncoder<R, W> {
-    in_: R,
-    out: W,
+pub struct DeflateEncoder {
     stage: EncodeStage,
 }
 
-impl<R, W> DeflateEncoder<R, W>
-where
-    R: io::Read,
-    W: io::Write,
-{
-    pub fn new(in_: R, out: W) -> Self {
+impl DeflateEncoder {
+    pub fn new() -> Self {
         Self {
-            in_,
-            out,
             stage: EncodeStage::NewBlock,
         }
     }
 
-    fn advance_stage(&mut self) -> io::Result<()> {
+    fn advance_stage<R, W>(&mut self, in_: &mut R, out: &mut W) -> io::Result<()>
+    where
+        R: io::Read,
+        W: io::Write,
+    {
         match self.stage {
             EncodeStage::NewBlock => {
                 const MAX_BYTES_PER_BLOCK: usize = u16::MAX as usize;
@@ -284,7 +290,7 @@ where
                 let mut is_eof = false;
 
                 loop {
-                    match self.in_.read(&mut buf[len..]) {
+                    match in_.read(&mut buf[len..]) {
                         Ok(0) => {
                             is_eof = true;
                             break;
@@ -311,18 +317,18 @@ where
                 // Pad bits to a full byte
                 header_bits.resize(8, false);
 
-                io::copy(&mut header_bits, &mut self.out)?;
+                io::copy(&mut header_bits, out)?;
 
                 // `.unwrap()` is safe because `len <= u16::MAX`
                 let len_header: u16 = len.try_into().unwrap();
                 let nlen_header = !len_header;
 
-                self.out.write_all(&len_header.to_le_bytes())?;
-                self.out.write_all(&nlen_header.to_le_bytes())?;
-                self.out.write_all(&buf[..len])?;
+                out.write_all(&len_header.to_le_bytes())?;
+                out.write_all(&nlen_header.to_le_bytes())?;
+                out.write_all(&buf[..len])?;
 
                 if is_eof {
-                    self.out.flush()?;
+                    out.flush()?;
                     self.stage = EncodeStage::Complete;
                 }
 
@@ -332,9 +338,13 @@ where
         }
     }
 
-    pub fn encode(&mut self) -> io::Result<()> {
+    pub fn encode<R, W>(&mut self, in_: &mut R, out: &mut W) -> io::Result<()>
+    where
+        R: io::Read,
+        W: io::Write,
+    {
         while !matches!(self.stage, EncodeStage::Complete) {
-            self.advance_stage()?;
+            self.advance_stage(in_, out)?;
         }
 
         Ok(())

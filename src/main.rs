@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use deflate_rs::{DeflateDecoder, DeflateEncoder};
+use deflate_rs::{BitReader, DeflateDecoder, DeflateEncoder};
 use std::io;
 
 #[derive(Debug, Subcommand)]
@@ -18,13 +18,16 @@ fn main() -> anyhow::Result<()> {
     let Args { command } = Args::try_parse()?;
     match command {
         Command::DeflateEncode => {
-            let mut encoder = DeflateEncoder::new(io::stdin().lock(), io::stdout().lock());
-            encoder.encode()?;
+            let mut encoder = DeflateEncoder::new();
+            encoder.encode(&mut io::stdin().lock(), &mut io::stdout().lock())?;
             Ok(())
         }
         Command::DeflateDecode => {
-            let mut decoder = DeflateDecoder::new(io::stdin().lock(), io::stdout().lock());
-            decoder.decode()?;
+            let mut decoder = DeflateDecoder::new();
+            decoder.decode(
+                &mut BitReader::new(io::stdin().lock()),
+                &mut io::stdout().lock(),
+            )?;
             Ok(())
         }
     }
