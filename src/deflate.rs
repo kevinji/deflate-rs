@@ -18,14 +18,20 @@ impl TryFrom<&BitSlice<u8>> for DeflateEncoding {
 
     fn try_from(slice: &BitSlice<u8>) -> io::Result<Self> {
         if slice.len() != 2 {
-            return Err(io::ErrorKind::InvalidData.into());
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("expected 2 encoding bits, got {}", slice.len()),
+            ));
         }
 
         match slice.load_le::<u8>() {
             0b00 => Ok(Self::NoCompression),
             0b01 => Ok(Self::FixedHuffman),
             0b10 => Ok(Self::DynamicHuffman),
-            0b11 => Err(io::ErrorKind::InvalidData.into()),
+            0b11 => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "0b11 is not a valid encoding",
+            )),
             _ => unreachable!(),
         }
     }
@@ -82,7 +88,12 @@ where
                         + (1 << (distance_code / 2 - 1)) * u16::from(distance_code % 2)
                         + extra_bits
                 }
-                30.. => return Err(io::ErrorKind::InvalidData.into()),
+                30.. => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("distance code must be <= 29, got {distance_code}"),
+                    ))
+                }
             };
 
             Ok(Symbol::BackReference {
@@ -90,7 +101,10 @@ where
                 distance_minus_one,
             })
         }
-        286.. => Err(io::ErrorKind::InvalidData.into()),
+        286.. => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("length code must be <= 285, got {length_code}"),
+        )),
     }
 }
 
@@ -145,7 +159,10 @@ impl DeflateDecoder {
                         let nlen = in_.read_u16()?;
 
                         if !len != nlen {
-                            return Err(io::ErrorKind::InvalidData.into());
+                            return Err(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                format!("len {len} does not match nlen {nlen}"),
+                            ));
                         }
 
                         for _ in 0..len {
@@ -233,10 +250,18 @@ impl DeflateDecoder {
                 } => {
                     let length = u16::from(length_minus_three) + 3;
                     for _ in 0..length {
-                        let byte = self
-                            .out_buffer
-                            .get(distance_minus_one.into())
-                            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData))?;
+                        let byte =
+                            self.out_buffer
+                                .get(distance_minus_one.into())
+                                .ok_or_else(|| {
+                                    io::Error::new(
+                                        io::ErrorKind::InvalidData,
+                                        format!(
+                                            "invalid backreference with distance {}",
+                                            distance_minus_one + 1,
+                                        ),
+                                    )
+                                })?;
 
                         out.write_all(&[byte])?;
                         self.out_buffer.push(byte);

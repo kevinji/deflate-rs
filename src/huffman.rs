@@ -92,7 +92,13 @@ impl HuffmanTree {
             index = 2 * index + usize::from(bit);
 
             if index >= self.tree.len() {
-                return Err(io::ErrorKind::InvalidData.into());
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "invalid Huffman code, got index {index} which is >= {len}",
+                        len = self.tree.len()
+                    ),
+                ));
             }
 
             if let Some(symbol) = self.tree[index] {
@@ -122,7 +128,10 @@ impl HuffmanTree {
                 16 => {
                     let repeat = in_.read_u8_from_bits(2)? + 3;
                     let Some(prev_code_length) = prev_code_length else {
-                        return Err(io::ErrorKind::InvalidData.into());
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "saw symbol=16, but no previous code length found",
+                        ));
                     };
 
                     code_lengths.resize(code_lengths.len() + usize::from(repeat), prev_code_length);
@@ -139,12 +148,23 @@ impl HuffmanTree {
 
                     prev_code_length = Some(0);
                 }
-                19.. => return Err(io::ErrorKind::InvalidData.into()),
+                19.. => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("symbol must be <= 18, got {symbol}"),
+                    ))
+                }
             }
         }
 
         if code_lengths.len() > code_length_count {
-            return Err(io::ErrorKind::InvalidData.into());
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "too many code lengths found; expected {code_length_count}, got {len}",
+                    len = code_lengths.len(),
+                ),
+            ));
         }
 
         Ok(Self::from_code_lengths(&code_lengths))
