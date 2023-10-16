@@ -4,48 +4,7 @@ use crate::{
     lzss::{OutBuffer, Symbol},
 };
 use bitvec::prelude::*;
-use std::io::{self, Write as _};
-
-#[derive(Debug)]
-pub struct OutWithChecksum<'a, O> {
-    out: &'a mut O,
-    size: u32,
-    crc_hasher: crc32fast::Hasher,
-}
-
-impl<'a, O> OutWithChecksum<'a, O> {
-    pub fn new(out: &'a mut O) -> Self {
-        Self {
-            out,
-            size: 0,
-            crc_hasher: crc32fast::Hasher::new(),
-        }
-    }
-
-    pub fn size(&self) -> u32 {
-        self.size
-    }
-
-    pub fn crc32(&self) -> u32 {
-        self.crc_hasher.clone().finalize()
-    }
-}
-
-impl<'a, O> io::Write for OutWithChecksum<'a, O>
-where
-    O: io::Write,
-{
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let bytes = self.out.write(buf)?;
-        self.crc_hasher.update(&buf[..bytes]);
-        self.size = self.size.wrapping_add(bytes as u32);
-        Ok(bytes)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.out.flush()
-    }
-}
+use std::io;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DeflateEncoding {
@@ -174,11 +133,7 @@ impl DeflateDecoder {
         }
     }
 
-    fn advance_stage<R, W>(
-        &mut self,
-        in_: &mut BitReader<R>,
-        out: &mut OutWithChecksum<W>,
-    ) -> io::Result<()>
+    fn advance_stage<R, W>(&mut self, in_: &mut BitReader<R>, out: &mut W) -> io::Result<()>
     where
         R: io::Read,
         W: io::Write,
@@ -317,11 +272,7 @@ impl DeflateDecoder {
         }
     }
 
-    pub fn decode<R, W>(
-        &mut self,
-        in_: &mut BitReader<R>,
-        out: &mut OutWithChecksum<W>,
-    ) -> io::Result<()>
+    pub fn decode<R, W>(&mut self, in_: &mut BitReader<R>, out: &mut W) -> io::Result<()>
     where
         R: io::Read,
         W: io::Write,

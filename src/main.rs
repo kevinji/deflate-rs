@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use deflate_rs::{BitReader, DeflateDecoder, DeflateEncoder, GzipDecoder, OutWithChecksum};
+use deflate_rs::{BitReader, DeflateDecoder, DeflateEncoder, GzipDecoder};
 use std::io;
 
 #[derive(Debug, Subcommand)]
@@ -27,7 +27,7 @@ fn main() -> anyhow::Result<()> {
             let mut decoder = DeflateDecoder::new();
             decoder.decode(
                 &mut BitReader::new(io::stdin().lock()),
-                &mut OutWithChecksum::new(&mut io::stdout().lock()),
+                &mut io::stdout().lock(),
             )?;
             Ok(())
         }

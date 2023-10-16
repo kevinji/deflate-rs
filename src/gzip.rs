@@ -1,7 +1,4 @@
-use crate::{
-    bit_io::BitReader,
-    deflate::{DeflateDecoder, OutWithChecksum},
-};
+use crate::{bit_io::BitReader, deflate::DeflateDecoder, out_with_checksum::OutWithChecksum};
 use bitvec::prelude::*;
 use std::io;
 
