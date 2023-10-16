@@ -95,10 +95,12 @@ where
 
     /// Precondition: `self.buffer.needs_flush()`
     fn read_next_byte(&mut self) -> io::Result<()> {
-        let byte = self
-            .inner
-            .next()
-            .ok_or_else(|| io::Error::from(io::ErrorKind::UnexpectedEof))??;
+        let byte = self.inner.next().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "unexpected EOF when reading next byte",
+            )
+        })??;
         self.buffer = byte.into();
         Ok(())
     }
@@ -117,6 +119,18 @@ where
         }
 
         Ok(())
+    }
+
+    pub fn is_eof(&mut self) -> io::Result<bool> {
+        if !self.buffer.needs_flush() {
+            return Ok(false);
+        }
+
+        match self.read_next_byte() {
+            Ok(()) => Ok(false),
+            Err(e) if matches!(e.kind(), io::ErrorKind::UnexpectedEof) => Ok(true),
+            Err(e) => Err(e),
+        }
     }
 
     pub fn read_bool(&mut self) -> io::Result<bool> {
@@ -149,6 +163,19 @@ where
 
     pub fn read_u16(&mut self) -> io::Result<u16> {
         self.read_u16_from_bits(16)
+    }
+
+    pub fn read_u32_from_bits(&mut self, bit_count: usize) -> io::Result<u32> {
+        assert!(bit_count <= 32);
+        let mut bv = <BitVec<u32>>::with_capacity(bit_count);
+        bv.resize(bit_count, false);
+
+        self.read_exact(bv.as_mut_bitslice())?;
+        Ok(bv.load_le::<u32>())
+    }
+
+    pub fn read_u32(&mut self) -> io::Result<u32> {
+        self.read_u32_from_bits(32)
     }
 
     pub fn skip_to_byte_end(&mut self) {
