@@ -164,7 +164,7 @@ impl GzipDecoder {
                 if input_size != actual_input_size {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
-                        format!("Input size (mod 2^32) does not match;\ngot {actual_input_size}, expected {input_size}")
+                        format!("Input size (mod 2^32) does not match; got {actual_input_size}, expected {input_size}")
                     ));
                 }
 
