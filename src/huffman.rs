@@ -195,7 +195,7 @@ mod tests {
     use super::*;
     use bitvec::prelude::*;
 
-    fn literal_bits<'a>(literal: u16, bit_len: usize) -> BitReader<BitVec<u16, Lsb0>> {
+    fn literal_bits(literal: u16, bit_len: usize) -> BitReader<BitVec<u16, Lsb0>> {
         let mut vec = BitVec::from(&literal.view_bits::<Lsb0>()[..bit_len]);
         vec.reverse();
 
