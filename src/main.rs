@@ -26,7 +26,7 @@ fn main() -> anyhow::Result<()> {
         Command::DeflateDecode => {
             let mut decoder = DeflateDecoder::new();
             decoder.decode(
-                &mut BitReader::new(io::stdin().lock()),
+                &mut BitReader::new(&mut io::stdin().lock()),
                 &mut io::stdout().lock(),
             )?;
             Ok(())
@@ -34,7 +34,7 @@ fn main() -> anyhow::Result<()> {
         Command::GzipDecode => {
             let mut decoder = GzipDecoder::new();
             decoder.decode(
-                &mut BitReader::new(io::stdin().lock()),
+                &mut BitReader::new(&mut io::stdin().lock()),
                 &mut io::stdout().lock(),
             )?;
             Ok(())

@@ -195,15 +195,14 @@ mod tests {
     use super::*;
     use bitvec::prelude::*;
 
-    fn literal_bits(literal: u16, bit_len: usize) -> BitReader<BitVec<u16, Lsb0>> {
+    fn literal_bits(literal: u16, bit_len: usize) -> BitVec<u16, Lsb0> {
         let mut vec = BitVec::from(&literal.view_bits::<Lsb0>()[..bit_len]);
         vec.reverse();
 
         // Pad to a multiple of 8 so `.read()` will return the last (possibly
         // partial) byte
         vec.resize(((bit_len - 1) / 8 + 1) * 8, false);
-
-        BitReader::new(vec)
+        vec
     }
 
     fn assert_decode(
@@ -214,7 +213,8 @@ mod tests {
     ) {
         for (literal, symbol) in literals.zip(symbols) {
             assert_eq!(
-                tree.decode(&mut literal_bits(literal, bit_len)).unwrap(),
+                tree.decode(&mut BitReader::new(&mut literal_bits(literal, bit_len)))
+                    .unwrap(),
                 symbol,
             );
         }

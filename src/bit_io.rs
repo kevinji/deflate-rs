@@ -66,42 +66,38 @@ impl ByteBuffer<ReadBuffer> {
     }
 }
 
-impl From<u8> for ByteBuffer<ReadBuffer> {
-    fn from(byte: u8) -> Self {
+impl From<[u8; 1]> for ByteBuffer<ReadBuffer> {
+    fn from(buf: [u8; 1]) -> Self {
         Self {
             _kind: PhantomData,
-            byte: [byte].into(),
+            byte: buf.into(),
             idx: 0,
         }
     }
 }
 
 #[derive(Debug)]
-pub struct BitReader<R> {
+pub struct BitReader<'a, R> {
     buffer: ByteBuffer<ReadBuffer>,
-    inner: io::Bytes<R>,
+    inner: &'a mut R,
 }
 
-impl<R> BitReader<R>
+impl<'a, R> BitReader<'a, R>
 where
     R: io::Read,
 {
-    pub fn new(inner: R) -> Self {
+    pub fn new(inner: &'a mut R) -> Self {
         Self {
             buffer: ByteBuffer::new_read(),
-            inner: inner.bytes(),
+            inner,
         }
     }
 
     /// Precondition: `self.buffer.needs_flush()`
     fn read_next_byte(&mut self) -> io::Result<()> {
-        let byte = self.inner.next().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "unexpected EOF when reading next byte",
-            )
-        })??;
-        self.buffer = byte.into();
+        let mut buf = [0; 1];
+        self.inner.read_exact(&mut buf)?;
+        self.buffer = buf.into();
         Ok(())
     }
 
@@ -215,16 +211,16 @@ impl From<ByteBuffer<WriteBuffer>> for u8 {
 }
 
 #[derive(Debug)]
-pub struct BitWriter<W> {
+pub struct BitWriter<'a, W> {
     buffer: ByteBuffer<WriteBuffer>,
-    inner: W,
+    inner: &'a mut W,
 }
 
-impl<W> BitWriter<W>
+impl<'a, W> BitWriter<'a, W>
 where
     W: io::Write,
 {
-    pub fn new(inner: W) -> Self {
+    pub fn new(inner: &'a mut W) -> Self {
         Self {
             buffer: ByteBuffer::new_write(),
             inner,
