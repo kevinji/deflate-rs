@@ -25,10 +25,11 @@ impl<'a, O> OutWithChecksum<'a, O> {
     }
 }
 
-impl<'a, O> io::Write for OutWithChecksum<'a, O>
+impl<O> io::Write for OutWithChecksum<'_, O>
 where
     O: io::Write,
 {
+    #[allow(clippy::cast_possible_truncation)]
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let bytes = self.out.write(buf)?;
         self.crc_hasher.update(&buf[..bytes]);

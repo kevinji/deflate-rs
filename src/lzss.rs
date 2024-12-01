@@ -17,6 +17,7 @@ pub enum Symbol {
     },
 }
 
+#[allow(dead_code)]
 impl Symbol {
     pub fn length_code(&self) -> u16 {
         match self {
@@ -68,14 +69,10 @@ impl Symbol {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct OutBuffer(VecDeque<u8>);
 
 impl OutBuffer {
-    pub fn new() -> Self {
-        Self(VecDeque::new())
-    }
-
     pub fn push(&mut self, byte: u8) {
         if self.0.len() == MAX_DISTANCE_BYTES {
             self.0.pop_back();

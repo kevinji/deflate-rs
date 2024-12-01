@@ -118,7 +118,13 @@ enum DecodeStage {
     Complete,
 }
 
-#[derive(Debug)]
+impl Default for DecodeStage {
+    fn default() -> Self {
+        Self::NewBlock
+    }
+}
+
+#[derive(Debug, Default)]
 pub struct DeflateDecoder {
     /// Stores a 32k buffer when blocks are compressed
     out_buffer: OutBuffer,
@@ -127,10 +133,7 @@ pub struct DeflateDecoder {
 
 impl DeflateDecoder {
     pub fn new() -> Self {
-        Self {
-            out_buffer: OutBuffer::new(),
-            stage: DecodeStage::NewBlock,
-        }
+        Self::default()
     }
 
     fn advance_stage<R, W>(&mut self, in_: &mut BitReader<R>, out: &mut W) -> io::Result<()>
@@ -291,16 +294,20 @@ enum EncodeStage {
     Complete,
 }
 
-#[derive(Debug)]
+impl Default for EncodeStage {
+    fn default() -> Self {
+        Self::NewBlock
+    }
+}
+
+#[derive(Debug, Default)]
 pub struct DeflateEncoder {
     stage: EncodeStage,
 }
 
 impl DeflateEncoder {
     pub fn new() -> Self {
-        Self {
-            stage: EncodeStage::NewBlock,
-        }
+        Self::default()
     }
 
     fn advance_stage<R, W>(&mut self, in_: &mut R, out: &mut W) -> io::Result<()>

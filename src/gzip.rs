@@ -13,16 +13,20 @@ enum DecodeStage {
     Complete,
 }
 
-#[derive(Debug)]
+impl Default for DecodeStage {
+    fn default() -> Self {
+        Self::NewMember
+    }
+}
+
+#[derive(Debug, Default)]
 pub struct GzipDecoder {
     stage: DecodeStage,
 }
 
 impl GzipDecoder {
     pub fn new() -> Self {
-        Self {
-            stage: DecodeStage::NewMember,
-        }
+        Self::default()
     }
 
     fn advance_stage<R, W>(&mut self, in_: &mut BitReader<R>, out: &mut W) -> io::Result<()>
