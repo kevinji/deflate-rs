@@ -1,10 +1,14 @@
 use crate::bit_io::BitReader;
-use std::{collections::BTreeMap, io};
+use std::{collections::BTreeMap, io, sync::LazyLock};
 
-// Type should be `[u8; 288]` if `.concat()` could be used in `const` contexts
-const FIXED_LITERAL_CODE_LENGTHS: [&[u8]; 4] = [&[8; 144], &[9; 112], &[7; 24], &[8; 8]];
+static FIXED_LITERAL_CODE_LENGTHS: LazyLock<[u8; 288]> = LazyLock::new(|| {
+    [&[8u8; 144] as &[_], &[9; 112], &[7; 24], &[8; 8]]
+        .concat()
+        .try_into()
+        .unwrap()
+});
 
-const DYNAMIC_CODE_LENGTH_SYMBOLS: [u8; 19] = [
+static DYNAMIC_CODE_LENGTH_SYMBOLS: [u8; 19] = [
     16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15,
 ];
 
@@ -52,7 +56,7 @@ impl HuffmanTree {
             }
 
             let code_len = usize::from(code_len);
-            let code: usize = next_code[code_len].try_into().unwrap();
+            let code: usize = next_code[code_len].into();
 
             let heap_index = compute_heap_index(code, code_len);
             let heap_symbol: u16 = symbol.try_into().unwrap();
@@ -65,7 +69,7 @@ impl HuffmanTree {
     }
 
     pub fn fixed_literal() -> Self {
-        Self::from_code_lengths(&FIXED_LITERAL_CODE_LENGTHS.concat())
+        Self::from_code_lengths(&*FIXED_LITERAL_CODE_LENGTHS)
     }
 
     pub fn dynamic_code_lengths(code_lengths_in_symbol_order: &[u8]) -> Self {
